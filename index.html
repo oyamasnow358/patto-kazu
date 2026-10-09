@@ -766,7 +766,8 @@ function jaSay(t) {
     ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, () => { clearTimeout(t); b.classList.remove('pressing'); }));
     return b;
   }
-  const unlocked = (p, i) => S().unlockAll || i === 0 || (p.stars[STAGES[i - 1].id] || 0) > 0 || (p.stars[STAGES[i].id] || 0) > 0;
+  const startOf = p => Math.max(0, Math.min(STAGES.length - 1, Number(p.startAt) || 0));
+  const unlocked = (p, i) => S().unlockAll || i <= startOf(p) || (p.stars[STAGES[i - 1].id] || 0) > 0 || (p.stars[STAGES[i].id] || 0) > 0;
 
   /* ---- だれ？ ---- */
   function renderWho() {
@@ -778,7 +779,7 @@ function jaSay(t) {
   function renderMap() {
     screen = 'map';
     const p = cur();
-    const nextI = STAGES.findIndex(s => !(p.stars[s.id] > 0));
+    let nextI = STAGES.findIndex((s, i) => i >= startOf(p) && !(p.stars[s.id] > 0)); if (nextI < 0) nextI = startOf(p);
     setView('map', [
       h('div', { class: 'maphead' }, h('h1', { class: 'title' }, 'ぱっと みて、いくつ？', h('small', null, 'ステージを えらんでね')),
         h('button', { type: 'button', class: 'mid-btn', onclick: () => { if (tapOk()) renderFree(); } }, E('🎲'), 'じゆうに あそぶ')),
@@ -793,6 +794,7 @@ function jaSay(t) {
             h('div', { class: 'st' }, [0, 1, 2].map(k => k < st ? '★' : h('i', null, '★'))));
         })))))
     ]);
+    requestAnimationFrame(scrollToNext);
   }
   function previewSVG(s) {
     const q = s.q[0];
@@ -1055,6 +1057,7 @@ function jaSay(t) {
   }
 
   /* ---- シールちょう ---- */
+  function scrollToNext() { const n = document.querySelector('.scard.next'); if (n && n.scrollIntoView) n.scrollIntoView({ block: 'center' }); }
   function renderBook() {
     screen = 'book';
     const p = cur(), have = new Set(p.stickers);
@@ -1186,7 +1189,10 @@ function jaSay(t) {
       h('button', { type: 'button', class: 'mini-btn', onclick: () => { p.icon = ICONS[(ICONS.indexOf(p.icon) + 1) % ICONS.length]; persist(); refresh(); } }, E(p.icon)),
       h('input', { type: 'text', value: p.name, style: 'flex:1;min-width:140px', oninput: e => { p.name = e.target.value; persistSoon(); } }),
       h('span', { class: 'note' }, '★' + Object.values(p.stars).reduce((a, b) => a + b, 0) + '・シール ' + new Set(p.stickers).size),
+      h('label', { class: 'note', style: 'display:flex;align-items:center;gap:6px;color:#1F2937' }, '▶ はじめる ステージ',
+        h('select', { onchange: e => { p.startAt = Number(e.target.value); persist(); refresh(); } }, STAGES.map((sg, k) => h('option', { value: k, selected: k === startOf(p) }, (k + 1) + '. ' + ISLANDS[sg.is].e + ' ' + sg.n)))),
       store.profiles.length > 1 ? h('button', { type: 'button', class: 'mini-btn warn', onclick: () => { if (confirm(p.name + ' を けしますか？（きろくも きえます）')) { store.profiles.splice(i, 1); if (store.currentId === p.id) store.currentId = store.profiles[0].id; persist(); refresh(); } } }, 'けす') : null)));
+    add(h('p', { class: 'note' }, '「はじめる ステージ」を えらぶと、その ステージまでが あいて、マップでは そこが つぎの ステージに なります（まえの ステージも あそべます）。その子に あった ところから はじめられます。'));
     add(h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn primary', onclick: () => { const np = newProfile('なまえ' + (store.profiles.length + 1), ICONS[store.profiles.length % ICONS.length]); store.profiles.push(np); viewPid = np.id; persist(); refresh(); } }, '＋ 子どもを ふやす')));
 
     add(h('h3', null, '🎮 あそびかた'),
