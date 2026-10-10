@@ -243,6 +243,18 @@
   .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: rgba(17,24,39,.9); color: #fff; padding: 14px 22px; border-radius: 14px; font-size: 18px; z-index: 60; display: none; max-width: 90vw; text-align: center; }
   .toast.show { display: block; }
 
+  /* ---------- 🖨️ プリントの 画面 ---------- */
+  .panel.wide { width: min(100%, 1180px); }
+  .seglabel { margin: 12px 0 6px; font-weight: 700; font-size: 15px; }
+  .prgrid { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 18px; margin-top: 10px; }
+  .prctl .seg button { min-width: 0; }
+  .prctl .seg.types { flex-direction: column; }
+  .prctl .seg.types button { text-align: left; padding: 10px 14px; }
+  .btn.blue { background: #1C7ED6; color: #fff; }
+  .prprev { background: #E9ECEF; border-radius: 16px; padding: 12px; max-height: 76vh; overflow-y: auto; }
+  .pwrap { margin: 0 auto 14px; box-shadow: 0 4px 14px rgba(0,0,0,.18); overflow: hidden; background: #fff; }
+  .pwrap .ppage { transform-origin: top left; }
+  @media (max-width: 820px) { .prgrid { grid-template-columns: 1fr; } }
   /* ---------- プリント（A4） ---------- */
   #printRoot { display: none; }
   .ppage { flex: none; width: 210mm; height: 297mm; padding: 13mm 13mm 10mm; box-sizing: border-box; background: #fff; color: #111; position: relative; overflow: hidden; font-family: "BIZ UDPGothic", "Hiragino Maru Gothic ProN", "Yu Gothic", "Meiryo", sans-serif; font-weight: 700; display: flex; flex-direction: column; gap: 3mm; }
@@ -287,10 +299,12 @@
   <button class="chip" id="whoChip" type="button" hidden></button>
   <div class="brand"><div class="mieel-brand" aria-label="MieeL"><span class="orb-mini"></span><strong>MieeL</strong><span class="url">mieel-support-school.com</span></div><span class="appname">ぱっと かず</span></div>
   <button class="chip" id="bookChip" type="button" aria-label="シールちょう"></button>
+  <button class="chip" id="printBtn" type="button" aria-label="A4プリントを つくる" hidden>🖨️<span class="appname">プリント</span></button>
   <button class="gear" id="gear" type="button" aria-label="先生用のせってい（ながおし）">⚙️</button>
 </header>
 <main id="view"></main>
 <div class="modal" id="settings" role="dialog" aria-modal="true" aria-label="先生用せってい"><div class="panel" id="settingsPanel"></div></div>
+<div class="modal" id="printModal" role="dialog" aria-modal="true" aria-label="プリント"><div class="panel wide" id="printPanel"></div></div>
 <div class="toast" id="toast"></div>
 <div id="printRoot"></div>
 
@@ -755,6 +769,7 @@ function jaSay(t) {
   function setView(cls, children) { stopAll(); const v = $('#view'); v.innerHTML = ''; v.appendChild(h('section', { class: 'screen ' + cls }, children)); chips(); }
   function chips() {
     const p = cur(), c = $('#whoChip'), b = $('#bookChip');
+    $('#printBtn').hidden = ['map', 'free', 'book'].indexOf(screen) < 0;
     c.hidden = store.profiles.length < 2 || screen === 'who' || screen === 'play';
     c.innerHTML = ''; c.append(E(p.icon), p.name);
     b.hidden = screen === 'who' || screen === 'play'; b.innerHTML = ''; b.append(E('📒'), String(new Set(p.stickers).size) + ' / ' + STICKERS.length);
@@ -1150,18 +1165,82 @@ function jaSay(t) {
   window.MieelPrintAPI = {
     version: 1,
     app: { id: 'patto-kazu', title: 'ぱっと かず', icon: '⚫' },
-    list() {
+    list(opt) {
+      const all = !!(opt && opt.all);
       const kinds = KIND_IDS.map(k => [k, (KINDS[k].e ? KINDS[k].e + ' ' : '') + KINDS[k].n]);
       return PR_TYPES.map(t => ({ id: t.id, name: t.n, icon: t.e, params: [
         t.id === 'hide' || t.id === 'fill' ? { key: 'total', label: 'ぜんぶの かず', opts: [[5, '5'], [10, '10']], def: 5 } : { key: 'range', label: 'かず', opts: RANGE_OPTS, def: '1-5' },
         t.id === 'paint' ? null : { key: 'kind', label: 'もの', opts: kinds, def: 'stone' },
         t.id === 'count' || t.id === 'match' ? { key: 'arr', label: 'ならべかた', opts: ['mix', 'dice', 'line', 'pair', 'scatter', 'frame', 'frameless'].map(k => [k, ARR_NAME[k]]), def: 'mix' } : null,
         t.id === 'count' ? { key: 'style', label: 'こたえかた', opts: [['write', 'かずを かく'], ['circle', '○を つける']], def: 'write' } : null,
+        { key: 'pages', label: 'まいすう', opts: [[1, '1まい'], [2, '2まい'], [3, '3まい']], def: 1 },
         { key: 'answer', label: 'こたえ', opts: [[false, 'なし'], [true, 'こたえの ページを つける']], def: false }
       ].filter(Boolean) }));
     },
     build(id, params) { return Promise.resolve({ pages: buildPages(id, params), css: document.querySelector('style').textContent }); }
   };
+
+  /* ============================================================
+     🖨️ プリントの 画面（ほかの MieeL アプリと おなじ かたち：ひだりに せってい、みぎに A4 の みほん）
+     みほんと おなじ ものが いんさつ されます。
+     ============================================================ */
+  const PrintUI = (function () {
+    const MM = 96 / 25.4;
+    let st = null, pages = [], custom = null;
+    function types() { return window.MieelPrintAPI.list({ all: true }); }
+    function ensure() {
+      const list = types();
+      if (!st || !list.some(t => t.id === st.type)) st = { type: list[0].id, v: {} };
+      const t = list.find(x => x.id === st.type);
+      t.params.forEach(p => { if (st.v[p.key] === undefined || !p.opts.some(o => String(o[0]) === String(st.v[p.key]))) st.v[p.key] = p.def; });
+      return t;
+    }
+    function build() { ensure(); return window.MieelPrintAPI.build(st.type, Object.assign({}, st.v)).then(r => { pages = r.pages; }); }
+    // きまった ページ（つくった はっぴょう など）を みほんつきで いんさつ
+    function openPages(title, arr) { stopSpeak(); custom = { title, pages: arr }; pages = arr; $('#printModal').classList.add('open'); $('#printModal').scrollTop = 0; render(); }
+    function open(type) {
+      stopSpeak(); custom = null;
+      if (type) { ensure(); st.type = type; }
+      $('#printModal').classList.add('open'); $('#printModal').scrollTop = 0;
+      build().then(render);
+    }
+    function close() { $('#printModal').classList.remove('open'); }
+    function render() {
+      const t = custom ? null : ensure();
+      const P = $('#printPanel'); P.innerHTML = '';
+      const re = () => build().then(render);
+      const seg = (label, cur, opts, on, cls) => [h('div', { class: 'seglabel' }, label), h('div', { class: 'seg' + (cls ? ' ' + cls : '') }, opts.map(o => h('button', { type: 'button', class: String(cur) === String(o[0]) ? 'on' : '', onclick: () => on(o[0]) }, o[1])))];
+      const prev = h('div', { class: 'prprev' });
+      P.append(
+        h('div', { class: 'panel-head' }, h('h2', null, '🖨️ A4 プリント'), h('button', { type: 'button', class: 'btn ok', onclick: close }, 'とじる')),
+        h('div', { class: 'prgrid' },
+          custom ? h('div', { class: 'prctl' }, h('div', { class: 'seglabel' }, custom.title),
+            h('div', { class: 'btns', style: 'margin-top:16px' }, h('button', { type: 'button', class: 'btn blue', onclick: doIt }, '🖨️ いんさつ する')),
+            h('p', { class: 'note' }, 'いんさつの せってい：よう紙 A4・たて、よはく「なし」（または さいしょう）、「背景の グラフィック」オンが おすすめです。'))
+          : h('div', { class: 'prctl' },
+            seg('プリントの しゅるい', st.type, types().map(x => [x.id, (x.icon ? x.icon + ' ' : '') + x.name]), v => { st.type = v; re(); }, 'types'),
+            t.params.map(p => p.opts.length > 6
+              ? [h('div', { class: 'seglabel' }, p.label), h('select', { style: 'width:100%', onchange: e => { const o = p.opts.find(x => String(x[0]) === e.target.value); st.v[p.key] = o ? o[0] : e.target.value; re(); } }, p.opts.map(o => h('option', { value: String(o[0]), selected: String(o[0]) === String(st.v[p.key]) }, o[1])))]
+              : seg(p.label, st.v[p.key], p.opts, v => { st.v[p.key] = v; re(); })),
+            h('div', { class: 'btns', style: 'margin-top:16px' },
+              h('button', { type: 'button', class: 'btn', onclick: re }, '🔄 べつの もんだい'),
+              h('button', { type: 'button', class: 'btn blue', onclick: doIt }, '🖨️ いんさつ する')),
+            h('p', { class: 'note' }, 'いんさつの せってい：よう紙 A4・たて、よはく「なし」（または さいしょう）、「背景の グラフィック」オンが おすすめです。'),
+            h('p', { class: 'note' }, pages.length + 'まい（みほんと おなじ ものが いんさつ されます）')),
+          prev));
+      const W = Math.max(240, (prev.clientWidth || 600) - 24), sc = Math.min(1, W / (210 * MM));
+      pages.forEach(pg => {
+        const w = h('div', { class: 'pwrap', style: 'width:' + (210 * MM * sc) + 'px;height:' + (297 * MM * sc) + 'px', html: pg });
+        w.firstChild.style.transform = 'scale(' + sc + ')';
+        prev.appendChild(w);
+      });
+    }
+    function doIt() { const root = $('#printRoot'); root.innerHTML = pages.join(''); setTimeout(() => window.print(), 60); }
+    window.addEventListener('afterprint', () => { $('#printRoot').innerHTML = ''; });
+    $('#printModal').addEventListener('click', e => { if (e.target.id === 'printModal') close(); });
+    $('#printBtn').addEventListener('click', () => { if (tapOk(500)) open(); });
+    return { open, openPages, close };
+  })();
 
   /* ============================================================
      先生用せってい
@@ -1218,17 +1297,8 @@ function jaSay(t) {
       recordView(vp));
 
     add(h('h3', null, '🖨️ プリント（A4）'),
-      srow('しゅるい', seg(pr.type, PR_TYPES.map(t => [t.id, t.e + ' ' + t.n.split('（')[0]]), v => { pr.type = v; refresh(); })),
-      pr.type === 'hide' || pr.type === 'fill' ? srow('ぜんぶの かず', seg(pr.total, [[5, '5'], [10, '10']], v => { pr.total = Number(v); refresh(); }))
-        : srow('かず', seg(pr.range, RANGE_OPTS, v => { pr.range = v; refresh(); })),
-      pr.type === 'paint' ? null : srow('もの', h('select', { onchange: e => { pr.kind = e.target.value; } }, KIND_IDS.map(k => h('option', { value: k, selected: k === pr.kind }, (KINDS[k].e || '') + ' ' + KINDS[k].n)))),
-      pr.type === 'count' || pr.type === 'match' ? srow('ならべかた', seg(pr.arr, ['mix', 'dice', 'line', 'pair', 'scatter', 'frame', 'frameless'].map(k => [k, ARR_NAME[k]]), v => { pr.arr = v; refresh(); })) : null,
-      pr.type === 'count' ? srow('こたえかた', seg(pr.style, [['write', 'かずを かく'], ['circle', '○を つける']], v => { pr.style = v; refresh(); })) : null,
-      srow('まいすう', seg(pr.pages, [[1, '1まい'], [2, '2まい'], [3, '3まい']], v => { pr.pages = Number(v); refresh(); })),
-      srow('こたえ', seg(pr.answer, [[false, 'なし'], [true, 'こたえの ページを つける']], v => { pr.answer = v === true || v === 'true'; refresh(); })),
-      h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn primary', onclick: () => doPrint(pr.type, Object.assign({}, pr)) }, '🖨️ いんさつ する')),
-      h('p', { class: 'note' }, 'いんさつは A4・たて、よはく なし、「背景の グラフィック」オンが おすすめです。「やすみの しゅくだい メーカー」からも とりこめます。'));
-
+      h('div', { class: 'btns' }, h('button', { type: 'button', class: 'btn primary', onclick: () => { closeSettings(); PrintUI.open(); } }, '🖨️ プリントの 画面を ひらく')),
+      h('p', { class: 'note' }, '上の 🖨️ プリント ボタンからも ひらけます。しゅるいや かずを えらぶと みほんが でて、みほんと おなじ ものが いんさつ されます。「やすみの しゅくだい メーカー」からも とりこめます。'));
     add(h('h3', null, '💡 このアプリの かんがえかた'),
       h('p', { class: 'note' }, '・かずを 1つずつ かぞえず「ぱっと みて わかる」ちから（サビタイジング）は 3〜5 まで そだちます。まず 1〜3 を たしかに し、5 の かたまり、5 の わくへ すすみます。', h('br'),
         '・6〜10 は「5 と いくつ」で みると ぱっと わかります（10 の わく）。わく あり → わく なし の じゅんで、わくに たよらずに みられるように します。', h('br'),
